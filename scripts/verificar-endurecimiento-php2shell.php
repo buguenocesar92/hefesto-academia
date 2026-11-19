@@ -158,7 +158,38 @@ function comprobarLasVersiones(): void
 }
 
 /**
- * Los ini de endurecimiento tienen que existir y fijar sus directivas tal cual.
+ * Normaliza un valor de ini para compararlo: los booleanos y los numeros se
+ * comparan por su valor, no por como los escribio PHP al leer el archivo.
+ */
+function valorNormalizado(mixed $valor): string
+{
+    if (is_bool($valor)) {
+        return $valor ? '1' : '0';
+    }
+
+    if (is_int($valor) || is_float($valor)) {
+        return (string) (int) $valor;
+    }
+
+    return strtolower(trim((string) $valor));
+}
+
+/**
+ * El valor que se espera de una directiva escrita como «directiva = valor»,
+ * con los mismos tipos que usa PHP al leer un .ini.
+ */
+function valorEsperado(string $esperado): string
+{
+    $escrito = parse_ini_string('x = '.$esperado, false, INI_SCANNER_TYPED);
+    $valor = is_array($escrito) ? ($escrito['x'] ?? $esperado) : $esperado;
+
+    return valorNormalizado($valor);
+}
+
+/**
+ * Los ini de endurecimiento tienen que existir, fijar sus directivas tal cual
+ * Y dejar el valor que se espera: en un .ini manda la ultima aparicion de la
+ * directiva, asi que la linea exacta no basta (una repetida la pisa).
  *
  * @param array<string, list<string>> $esperados
  */
@@ -174,10 +205,24 @@ function comprobarLosInis(array $esperados): void
         }
 
         $contenido = leer($archivo);
+        $valores = parse_ini_file($archivo, false, INI_SCANNER_TYPED);
+
+        if (! is_array($valores)) {
+            anota($ruta.' no se puede leer como ini.');
+
+            continue;
+        }
 
         foreach ($directivas as $directiva) {
             if (preg_match('/^'.preg_quote($directiva, '/').'$/m', $contenido) !== 1) {
                 anota($ruta.' no fija la directiva exacta «'.$directiva.'».');
+            }
+
+            [$nombre, $esperado] = array_map('trim', explode('=', $directiva, 2));
+            $valor = $valores[$nombre] ?? null;
+
+            if ($valor === null || valorNormalizado($valor) !== valorEsperado($esperado)) {
+                anota($ruta.' deja «'.$nombre.'» en «'.(is_scalar($valor) ? (string) $valor : 'sin valor').'», y deberia quedar en «'.$esperado.'».');
             }
         }
     }
