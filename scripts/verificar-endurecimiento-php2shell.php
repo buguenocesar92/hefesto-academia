@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /**
  * CANDADO: CVE-2026-109618 / CVE-2026-109619 (PHP2Shell, @@FECHA@@).
+ * CANDADO: CVE-2026-126714 / GHSA-fm2m-fjf5-v3cp (sesiones "files", 2026-11-19).
  *
  * Este repo no tiene framework de pruebas: es una imagen de Moodle con Apache y
  * mod_php, sin `composer.json` ni suite de PHPUnit. El candado es este script,
@@ -18,20 +19,21 @@ declare(strict_types=1);
  *
  * QUE COMPRUEBA
  * -------------
- *   1. Que la base de la imagen use una version de PHP PARCHEADA (las
- *      parcheadas son 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12).
- *   2. Que el ini de endurecimiento apague `session.upload_progress.enabled`,
+ *   1. Que la base de la imagen use una version de PHP PARCHEADA, de la serie
+ *      8.3 y fijada por tag Y digest, por encima de las dos versiones
+ *      parcheadas: la de PHP2Shell (8.3.36) y la de CVE-2026-126714 (8.3.37).
+ *   2. Que los ini de endurecimiento fijen sus directivas tal cual, y que la
+ *      etapa final del Dockerfile los copie a `conf.d`.
+ *   3. Que el ini de endurecimiento apague `session.upload_progress.enabled`,
  *      que es la via CONFIRMADA de CVE-2026-109619.
- *   3. Que la etapa final del Dockerfile copie el ini a `conf.d` y el archivo de
- *      Apache a `conf-available/`, y que lo habilite con `a2enconf`.
- *   4. Que Apache recicle los hijos cada 100 peticiones.
- *   5. Que la etapa final actualice el sistema base.
- *   6. Que NADA en el repo vuelva a encender `session.upload_progress.enabled`.
- *   7. Que la base de la imagen este por encima de la version parcheada de
- *      CVE-2026-126714 (8.3.37 en la serie 8.3), que es mas alta que la de
- *      PHP2Shell, y que el ini registre la version con la que se construyo.
- *   8. Que el ini de mitigacion de sesiones nativas exista con sus cuatro
- *      directivas y que la etapa final lo copie a conf.d.
+ *   4. Que el ini de mitigacion de sesiones nativas (CVE-2026-126714) exista
+ *      con sus cuatro directivas, y que en la imagen sus valores sean los
+ *      EFECTIVOS: otro .ini de conf.d los puede pisar.
+ *   5. Que la etapa final copie el archivo de Apache a `conf-available/` y lo
+ *      habilite con `a2enconf`.
+ *   6. Que Apache recicle los hijos cada 100 peticiones.
+ *   7. Que la etapa final actualice el sistema base.
+ *   8. Que NADA en el repo vuelva a encender `session.upload_progress.enabled`.
  *
  * SALE CON CODIGO 0 SI TODO ESTA BIEN, Y CON CODIGO 1 SI ALGO FALLA.
  */
@@ -46,6 +48,12 @@ const APACHE = 'docker/zz-php2shell-apache.conf';
 // CVE-2026-126714 (GHSA-fm2m-fjf5-v3cp): el save handler "files" de
 // ext-session reescribe el archivo de sesion sin truncarlo.
 const INI_SESIONES = 'docker/php/99-security-cve-2026-126714.ini';
+
+// Las directivas, tal cual: el verificador externo del parche exige la linea
+// exacta, no un valor equivalente.
+const DIRECTIVAS_PHP2SHELL = [
+    'session.upload_progress.enabled = Off',
+];
 const DIRECTIVAS_SESIONES = [
     'session.upload_progress.enabled = Off',
     'session.upload_progress.cleanup = On',
@@ -112,84 +120,66 @@ function lineasDeLaEtapaFinal(): array
     return array_slice($lineas, $ultimoFrom);
 }
 
-function comprobarLaVersionDeLaBase(): void
+/**
+ * La version de PHP de la base de la imagen y la que dejo registrada el ini de
+ * endurecimiento: las dos tienen que estar por encima de la version parcheada.
+ */
+function comprobarLasVersiones(): void
 {
     $contenido = leer(raiz().'/'.DOCKERFILE);
 
     if (preg_match('/^FROM\s+(?:docker\.io\/library\/)?php:(\S+)/mi', $contenido, $coincidencia) !== 1) {
         anota('El Dockerfile no declara una base «FROM php:...».');
+    } else {
+        $tag = $coincidencia[1];
 
-        return;
+        // La base va fijada por digest: un tag puede mudar entre dos builds sin
+        // que nadie lo note, y con el se va el parche de PHP.
+        if (! str_contains($tag, '@sha256:')) {
+            anota('La base «'.$tag.'» no esta fijada por digest («tag@sha256:...»): el tag puede mudar entre dos builds sin que nadie lo note.');
+        }
+
+        // Y tiene que decir la version completa: un tag flotante como
+        // «8.3-apache-bookworm» no deja constancia de con que PHP se construyo.
+        if (preg_match('/^(\d+\.\d+\.\d+)/', $tag, $version) !== 1) {
+            anota('La base «'.$tag.'» no fija la version PHP x.y.z.');
+        } elseif (! str_starts_with($version[1], SERIE.'.')) {
+            anota('La base «'.$tag.'» no es de la serie '.SERIE.', que es la que tiene la version parcheada ('.VERSION_MINIMA.').');
+        } elseif (version_compare($version[1], VERSION_MINIMA, '<')) {
+            anota('La base «'.$tag.'» esta por debajo de la version parcheada ('.VERSION_MINIMA.') de la serie '.SERIE.'.');
+        }
     }
 
-    $tag = $coincidencia[1];
-
-    // La base va fijada por digest: un tag puede mudar entre dos builds sin
-    // que nadie lo note, y con el se va el parche de PHP.
-    if (! str_contains($tag, '@sha256:')) {
-        anota('La base «'.$tag.'» no esta fijada por digest («tag@sha256:...»): el tag puede mudar entre dos builds sin que nadie lo note.');
-    }
-
-    // Y tiene que decir la version completa: un tag flotante como
-    // «8.3-apache-bookworm» no deja constancia de con que PHP se construyo.
-    if (preg_match('/^(\d+\.\d+\.\d+)/', $tag, $version) !== 1) {
-        anota('La base «'.$tag.'» no fija la version PHP x.y.z.');
-
-        return;
-    }
-
-    if (! str_starts_with($version[1], SERIE.'.')) {
-        anota('La base «'.$tag.'» no es de la serie '.SERIE.', que es la que tiene la version parcheada ('.VERSION_MINIMA.').');
-
-        return;
-    }
-
-    if (version_compare($version[1], VERSION_MINIMA, '<')) {
-        anota('La base «'.$tag.'» esta por debajo de la version parcheada ('.VERSION_MINIMA.') de la serie '.SERIE.'.');
-    }
-}
-
-function comprobarLaVersionVerificada(): void
-{
-    $ini = leer(raiz().'/'.INI);
-
-    if (preg_match('/PHP verificado:\s*(\d+\.\d+\.\d+)/', $ini, $coincidencia) !== 1) {
+    if (preg_match('/PHP verificado:\s*(\d+\.\d+\.\d+)/', leer(raiz().'/'.INI), $verificada) !== 1) {
         anota(INI.' no deja constancia de la version de PHP con la que se construyo la imagen.');
-
-        return;
-    }
-
-    if (version_compare($coincidencia[1], VERSION_MINIMA, '<')) {
-        anota('La version de PHP verificada ('.$coincidencia[1].') esta por debajo de la version parcheada ('.VERSION_MINIMA.') de la serie '.SERIE.'.');
+    } elseif (version_compare($verificada[1], VERSION_MINIMA, '<')) {
+        anota('La version de PHP verificada ('.$verificada[1].') esta por debajo de la version parcheada ('.VERSION_MINIMA.') de la serie '.SERIE.'.');
     }
 }
 
-function comprobarElIni(): void
+/**
+ * Los ini de endurecimiento tienen que existir y fijar sus directivas tal cual.
+ *
+ * @param array<string, list<string>> $esperados
+ */
+function comprobarLosInis(array $esperados): void
 {
-    $ruta = raiz().'/'.INI;
+    foreach ($esperados as $ruta => $directivas) {
+        $archivo = raiz().'/'.$ruta;
 
-    if (! is_file($ruta)) {
-        anota('Falta '.INI.': la imagen queda con los valores de fabrica de PHP.');
+        if (! is_file($archivo)) {
+            anota('Falta '.$ruta.': la imagen queda con los valores de fabrica de PHP.');
 
-        return;
-    }
+            continue;
+        }
 
-    $valores = parse_ini_file($ruta, false, INI_SCANNER_TYPED);
+        $contenido = leer($archivo);
 
-    if (! is_array($valores)) {
-        anota(INI.' no se puede leer como ini.');
-
-        return;
-    }
-
-    if (! array_key_exists('session.upload_progress.enabled', $valores)) {
-        anota(INI.' no fija «session.upload_progress.enabled»: es la via CONFIRMADA del UAF de CVE-2026-109619.');
-
-        return;
-    }
-
-    if ($valores['session.upload_progress.enabled']) {
-        anota(INI.' deja «session.upload_progress.enabled» encendido: PHP lo trae en On por omision.');
+        foreach ($directivas as $directiva) {
+            if (preg_match('/^'.preg_quote($directiva, '/').'$/m', $contenido) !== 1) {
+                anota($ruta.' no fija la directiva exacta «'.$directiva.'».');
+            }
+        }
     }
 }
 
@@ -211,29 +201,6 @@ function comprobarLasCopias(): void
 
     if (str_contains($etapa, 'a2enconf zz-php2shell-hardening') === false) {
         anota('El Dockerfile no habilita el archivo de Apache con «a2enconf zz-php2shell-hardening».');
-    }
-}
-
-/**
- * El ini de mitigacion de CVE-2026-126714: debe existir y fijar sus cuatro
- * directivas, tal cual (mismo formato que el verificador externo del parche).
- */
-function comprobarElIniDeLasSesiones(): void
-{
-    $ruta = raiz().'/'.INI_SESIONES;
-
-    if (! is_file($ruta)) {
-        anota('Falta '.INI_SESIONES.': la imagen queda con los valores de fabrica de PHP.');
-
-        return;
-    }
-
-    $contenido = leer($ruta);
-
-    foreach (DIRECTIVAS_SESIONES as $directiva) {
-        if (preg_match('/^'.preg_quote($directiva, '/').'$/m', $contenido) !== 1) {
-            anota(INI_SESIONES.' no fija la directiva exacta «'.$directiva.'».');
-        }
     }
 }
 
@@ -335,12 +302,19 @@ function comprobarLaImagen(): void
         anota('En la imagen, el archivo de Apache no esta habilitado en conf-enabled/.');
     }
 
-    // CVE-2026-126714: el ini de mitigacion tiene que estar en la imagen, y sus
-    // valores tienen que ser los EFECTIVOS: otro .ini de conf.d los puede pisar.
-    $iniSesiones = '/usr/local/etc/php/conf.d/99-security-cve-2026-126714.ini';
+    comprobarLaImagenDeLasSesiones();
+}
 
-    if (! is_file($iniSesiones)) {
-        anota('La imagen no tiene '.$iniSesiones.'.');
+/**
+ * CVE-2026-126714: el ini de mitigacion tiene que estar en la imagen, y sus
+ * valores tienen que ser los EFECTIVOS: otro .ini de conf.d los puede pisar.
+ */
+function comprobarLaImagenDeLasSesiones(): void
+{
+    $ini = '/usr/local/etc/php/conf.d/99-security-cve-2026-126714.ini';
+
+    if (! is_file($ini)) {
+        anota('La imagen no tiene '.$ini.'.');
 
         return;
     }
@@ -366,10 +340,11 @@ $modoImagen = in_array('--imagen', $argv, true);
 if ($modoImagen) {
     comprobarLaImagen();
 } else {
-    comprobarLaVersionDeLaBase();
-    comprobarLaVersionVerificada();
-    comprobarElIni();
-    comprobarElIniDeLasSesiones();
+    comprobarLasVersiones();
+    comprobarLosInis([
+        INI => DIRECTIVAS_PHP2SHELL,
+        INI_SESIONES => DIRECTIVAS_SESIONES,
+    ]);
     comprobarLasCopias();
     comprobarElReciclajeDeApache();
     comprobarLaActualizacionDelSistema();
