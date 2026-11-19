@@ -49,16 +49,19 @@ const APACHE = 'docker/zz-php2shell-apache.conf';
 // ext-session reescribe el archivo de sesion sin truncarlo.
 const INI_SESIONES = 'docker/php/99-security-cve-2026-126714.ini';
 
-// Las directivas, tal cual: el verificador externo del parche exige la linea
-// exacta, no un valor equivalente.
-const DIRECTIVAS_PHP2SHELL = [
-    'session.upload_progress.enabled = Off',
-];
-const DIRECTIVAS_SESIONES = [
-    'session.upload_progress.enabled = Off',
-    'session.upload_progress.cleanup = On',
-    'session.serialize_handler = php_serialize',
-    'session.use_strict_mode = 1',
+// Las directivas que cada ini tiene que fijar, tal cual: el verificador
+// externo del parche exige la linea exacta, y el valor efectivo se comprueba
+// aparte (en un .ini manda la ultima aparicion de la directiva).
+const INIS_ESPERADOS = [
+    INI => [
+        'session.upload_progress.enabled = Off',
+    ],
+    INI_SESIONES => [
+        'session.upload_progress.enabled = Off',
+        'session.upload_progress.cleanup = On',
+        'session.serialize_handler = php_serialize',
+        'session.use_strict_mode = 1',
+    ],
 ];
 
 $fallos = [];
@@ -190,12 +193,10 @@ function valorEsperado(string $esperado): string
  * Los ini de endurecimiento tienen que existir, fijar sus directivas tal cual
  * Y dejar el valor que se espera: en un .ini manda la ultima aparicion de la
  * directiva, asi que la linea exacta no basta (una repetida la pisa).
- *
- * @param array<string, list<string>> $esperados
  */
-function comprobarLosInis(array $esperados): void
+function comprobarLosInis(): void
 {
-    foreach ($esperados as $ruta => $directivas) {
+    foreach (INIS_ESPERADOS as $ruta => $directivas) {
         $archivo = raiz().'/'.$ruta;
 
         if (! is_file($archivo)) {
@@ -386,10 +387,7 @@ if ($modoImagen) {
     comprobarLaImagen();
 } else {
     comprobarLasVersiones();
-    comprobarLosInis([
-        INI => DIRECTIVAS_PHP2SHELL,
-        INI_SESIONES => DIRECTIVAS_SESIONES,
-    ]);
+    comprobarLosInis();
     comprobarLasCopias();
     comprobarElReciclajeDeApache();
     comprobarLaActualizacionDelSistema();
