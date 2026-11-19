@@ -1,27 +1,30 @@
 # =============================================================================
 # CVE-2026-109618 / CVE-2026-109619 (PHP2Shell, 2026-10-22)
+# CVE-2026-126714 / GHSA-fm2m-fjf5-v3cp (sesiones "files", 2026-11-19)
 # =============================================================================
-# La imagen se construye con PHP 8.3.36, que es la version PARCHEADA
-# de la serie 8.3. Las versiones parcheadas de PHP son
-# 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12.
+# La imagen se construye con PHP 8.3.37, que es la version PARCHEADA de la
+# serie 8.3 para los dos avisos:
 #
-# Verificado el 2026-10-22 en el servidor de desarrollo, con el tag exacto:
+#   - CVE-2026-109618 / 109619 (PHP2Shell): 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12
+#   - CVE-2026-126714 (sesiones "files"):   8.2.36 / 8.3.37 / 8.4.28 / 8.5.13
 #
-#     $ docker run --rm php:8.3-apache-bookworm php -v
-#     PHP 8.3.36 (cli) (built: Oct 21 2026 15:59:49)
+# Verificado el 2026-11-19 contra Docker Hub:
 #
-# El tag `php:8.3-apache-bookworm` es FLOTANTE: no se cambia, se deja constancia.
-# El tag resuelve hoy a PHP 8.3.36, que es la version parcheada de la serie
-# 8.3. Se deja escrito porque un tag flotante puede mudar sin que nadie lo
-# note: la comprobacion va en el candado (scripts/verificar-*.php), que falla
-# si el tag vuelve a quedar por debajo de la version parcheada.
+#     $ docker buildx imagetools inspect php:8.3.37-apache-bookworm
+#     Digest: sha256:d60f7be79a869deb1562b6ecb2f555bccb65c8dd4af930b50ae4d14d4bd4696c
+#
+# La base va FIJADA por tag Y por digest: el tag solo no alcanza, porque un
+# tag puede mudar de digest entre dos builds sin que nadie lo note. El digest
+# es el del indice de imagenes (manifest list) de "php:8.3.37-apache-bookworm".
+# La comprobacion va en el candado (scripts/verificar-*.php), que falla si la
+# base vuelve a quedar por debajo de la version parcheada de la serie 8.3.
 #
 # OJO: LA IMAGEN DESPLIEGADA HAY QUE RECONSTRUIRLA. El parche de PHP entra en
 # el contenedor por la IMAGEN, no por este repositorio: mientras no se
 # reconstruya y se redespliegue, el contenedor sigue con el PHP viejo. El
-# endurecimiento de mas abajo (el ini y el archivo de Apache) es la red de seguridad
+# endurecimiento de mas abajo (los ini y el archivo de Apache) es la red de seguridad
 # para ese mientras, y lo que sobrevive a un redeploy.
-FROM php:8.3-apache-bookworm
+FROM php:8.3.37-apache-bookworm@sha256:d60f7be79a869deb1562b6ecb2f555bccb65c8dd4af930b50ae4d14d4bd4696c
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates curl libpq-dev libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev \
     libfreetype6-dev libxml2-dev libonig-dev libsodium-dev \
@@ -46,7 +49,7 @@ COPY docker/php.ini /usr/local/etc/php/conf.d/hefesto.ini
 COPY docker/99-php2shell-hardening.ini /usr/local/etc/php/conf.d/99-php2shell-hardening.ini
 COPY docker/zz-php2shell-apache.conf /etc/apache2/conf-available/zz-php2shell-hardening.conf
 
-# Mitigacion CVE-2026-126714 (GHSA-fm2m-fjf5-v3cp): el save handler «files»
+# Mitigacion CVE-2026-126714 (GHSA-fm2m-fjf5-v3cp): el save handler "files"
 # de ext-session reescribe el archivo de sesion sin truncarlo, asi que una
 # escritura interrumpida mezcla la sesion nueva con la vieja y deja inyectar
 # objetos al deserializar. Se apaga el vector (session.upload_progress) y se
